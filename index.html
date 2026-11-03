@@ -81,6 +81,7 @@ input::placeholder,textarea::placeholder{color:var(--muted);opacity:1}
   user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;touch-action:pan-y;
   transition:background-color .3s,color .3s,box-shadow .3s,scale .18s}
 .card.press{scale:.975}
+.card *{pointer-events:none}
 .ct{font-size:14px;font-weight:600;line-height:1.3;letter-spacing:-.005em;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
 .cm{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;margin-top:6px;font-size:11.5px;font-weight:500;line-height:1.2;opacity:.84}
 .cm:empty{display:none}
@@ -286,9 +287,10 @@ function meta(cm,t,sw){
 }
 function fill(el,t,z){
   const sw=swapped(t,z);
-  const ct=document.createElement('div');ct.className='ct';ct.textContent=sw?t.person:t.title;
-  const cm=document.createElement('div');cm.className='cm';meta(cm,t,sw);
-  el.replaceChildren(ct,cm);el.dataset.mode=sw?'p':'t';
+  let ct=el.querySelector(':scope>.ct'),cm=el.querySelector(':scope>.cm');
+  if(!ct||!cm){ct=document.createElement('div');ct.className='ct';cm=document.createElement('div');cm.className='cm';el.replaceChildren(ct,cm);}
+  const txt=sw?t.person:t.title;if(ct.textContent!==txt)ct.textContent=txt;
+  meta(cm,t,sw);el.dataset.mode=sw?'p':'t';
 }
 function syncMode(el,z){const f=find(el.dataset.id);if(f&&el.dataset.mode!==(swapped(f.t,z)?'p':'t'))fill(el,f.t,z);}
 function cardEl(t,z){const el=document.createElement('div');el.className='card';el.dataset.id=t.id;fill(el,t,z);return el;}
@@ -438,22 +440,35 @@ function tap(card,x,y,ev){
   D.lastTap={card,t,x,y};
 }
 
-/* --- touch --- */
+/* --- touch ---
+   Listeners sit on the touched element AND on document: the touched element keeps
+   receiving its own touch events whatever happens to the DOM around it, and the
+   _lt flag guarantees each event is handled exactly once. Touches are tracked by id. */
+const TOPT={passive:false};
+const findTouch=(list,id)=>{for(const t of list)if(t.identifier===id)return t;return null;};
+function bindTouch(tg){unbindTouch();D.tg=tg;tg.addEventListener('touchmove',onTMove,TOPT);tg.addEventListener('touchend',onTEnd,TOPT);tg.addEventListener('touchcancel',onTCancel,TOPT);}
+function unbindTouch(){const tg=D.tg;if(!tg)return;D.tg=null;tg.removeEventListener('touchmove',onTMove,TOPT);tg.removeEventListener('touchend',onTEnd,TOPT);tg.removeEventListener('touchcancel',onTCancel,TOPT);}
 document.addEventListener('touchstart',e=>{
+  /* self-heal: a drag/press whose finger is already gone is closed before anything else */
+  if(D.drag&&D.drag.type==='touch'&&!findTouch(e.touches,D.drag.tid))endDrag(true);
+  if(D.pending&&D.pending.type==='touch'&&!findTouch(e.touches,D.pending.tid))cancelPending();
   if(E.id||D.drag)return;
   if(e.touches.length>1){cancelPending();return;}
   const c=pickCard(e.target);if(!c)return;
-  const t=e.touches[0],list=c.parentElement;
-  const p=D.pending={card:c,list,x:t.clientX,y:t.clientY,lx:t.clientX,ly:t.clientY,t:clock(),type:'touch',sc:scrollable(list)};
+  const t=e.changedTouches[0],list=c.parentElement;
+  bindTouch(e.target);
+  const p=D.pending={card:c,list,tid:t.identifier,x:t.clientX,y:t.clientY,lx:t.clientX,ly:t.clientY,t:clock(),type:'touch',sc:scrollable(list)};
   if(p.sc){
     p.pt=setTimeout(()=>{if(D.pending===p)c.classList.add('press');},90);
     p.timer=setTimeout(()=>{if(D.pending===p)startDrag(p.lx,p.ly);},200);
   }
 },{passive:true});
-document.addEventListener('touchmove',e=>{
-  const t=e.touches[0];if(!t)return;
-  if(D.drag){if(e.cancelable)e.preventDefault();if(D.drag.type==='touch')moveDrag(t.clientX,t.clientY);return;}
-  const p=D.pending;if(!p||p.type!=='touch')return;
+function onTMove(e){
+  if(e._lt)return;e._lt=1;
+  const cur=D.drag||D.pending;if(!cur||cur.type!=='touch')return;
+  const t=findTouch(e.touches,cur.tid);if(!t)return;
+  if(D.drag){if(e.cancelable)e.preventDefault();moveDrag(t.clientX,t.clientY);return;}
+  const p=D.pending;
   p.lx=t.clientX;p.ly=t.clientY;
   const dx=p.lx-p.x,dy=p.ly-p.y,ad=Math.abs(dx),dist=Math.hypot(dx,dy);
   if(!p.sc){
@@ -462,14 +477,24 @@ document.addEventListener('touchmove',e=>{
   }
   if(ad>8&&ad>Math.abs(dy)*1.2){if(e.cancelable){e.preventDefault();startDrag(p.lx,p.ly);}else cancelPending();return;}
   if(dist>10)cancelPending();
-},{passive:false});
-document.addEventListener('touchend',e=>{
-  if(D.drag){if(D.drag.type==='touch'&&e.touches.length===0)endDrag(false);return;}
-  const p=D.pending;if(!p||p.type!=='touch')return;
+}
+function onTEnd(e){
+  if(e._lt)return;e._lt=1;
+  if(!e.touches.length)unbindTouch();
+  const d=D.drag;
+  if(d){if(d.type==='touch'&&findTouch(e.changedTouches,d.tid))endDrag(false);return;}
+  const p=D.pending;if(!p||p.type!=='touch'||!findTouch(e.changedTouches,p.tid))return;
   cancelPending();
   if(clock()-p.t<400&&Math.hypot(p.lx-p.x,p.ly-p.y)<10)tap(p.card,p.x,p.y,e);
-},{passive:false});
-document.addEventListener('touchcancel',()=>{if(D.drag&&D.drag.type==='touch')endDrag(true);else cancelPending();});
+}
+function onTCancel(e){
+  if(e._lt)return;e._lt=1;
+  if(!e.touches.length)unbindTouch();
+  if(D.drag&&D.drag.type==='touch')endDrag(true);else if(D.pending&&D.pending.type==='touch')cancelPending();
+}
+document.addEventListener('touchmove',onTMove,TOPT);
+document.addEventListener('touchend',onTEnd,TOPT);
+document.addEventListener('touchcancel',onTCancel,TOPT);
 
 /* --- mouse / pen --- */
 document.addEventListener('pointerdown',e=>{
@@ -484,6 +509,10 @@ addEventListener('pointermove',e=>{
   const p=D.pending;if(!p||p.type!=='mouse')return;
   p.lx=e.clientX;p.ly=e.clientY;
   if(Math.hypot(p.lx-p.x,p.ly-p.y)>4)startDrag(p.lx,p.ly);
+});
+addEventListener('pointercancel',e=>{
+  if(e.pointerType==='touch')return;
+  if(D.drag&&D.drag.type==='mouse')endDrag(true);else cancelPending();
 });
 addEventListener('pointerup',e=>{
   if(e.pointerType==='touch')return;
@@ -508,7 +537,7 @@ function startDrag(x,y){
   g.getBoundingClientRect();g.style.transition='';
   card.style.transform='';card.style.transition='';
   card.classList.add('ph');
-  const d=D.drag={type:p.type,card,g,from:z,zone:z,hover:z,x,y,ox:x-r.left,oy:y-r.top,w:r.width,h:r.height,
+  const d=D.drag={type:p.type,tid:p.tid,card,g,from:z,zone:z,hover:z,x,y,ox:x-r.left,oy:y-r.top,w:r.width,h:r.height,
     s:1,rot:0,armed:false,denied:false,smp:[{x,y,t:clock()}],raf:0};
   document.body.classList.add('dragging');
   vib(8);
@@ -557,7 +586,7 @@ function target(){
   const d=D.drag;if(!d)return;
   const W=innerWidth,H=innerHeight,gx=d.x-d.ox,gy=d.y-d.oy,w=d.w,h=d.card.offsetHeight||d.h;
   const vw=Math.max(0,Math.min(gx+w,W)-Math.max(gx,0)),vh=Math.max(0,Math.min(gy+h,H)-Math.max(gy,0));
-  const armed=1-(vw*vh)/(w*h)>=.38;
+  const out=1-(vw*vh)/(w*h),edge=Math.min(d.x,W-d.x,d.y,H-d.y),armed=d.armed?(out>=.42||edge<=22):(out>=.5||edge<=10);
   if(armed!==d.armed){d.armed=armed;d.g.classList.toggle('doomed',armed);edgeEl.classList.toggle('on',armed);if(armed)vib(6);}
   if(armed){setHover(null);deny(false);return;}
   let z=null;
@@ -595,7 +624,7 @@ function endDrag(cancel){
   const v=vel(d),W=innerWidth,H=innerHeight;
   const cx=d.x-d.ox+d.w/2,cy=d.y-d.oy+(d.card.offsetHeight||d.h)/2;
   const sp=Math.hypot(v.x,v.y),px=cx+v.x*240,py=cy+v.y*240;
-  const flung=sp>1.6&&(px<-30||px>W+30||py<-30||py>H+30);
+  const flung=sp>1.9&&(px<-30||px>W+30||py<-30||py>H+30);
   if(!cancel&&(d.armed||flung))discard(d,v,cx,cy);else settle(d);
 }
 function settle(d){
@@ -642,6 +671,7 @@ function refreshMeta(){
   fTime.refresh();
 }
 setInterval(()=>{if(!D.drag)refreshMeta();},60000);
+addEventListener('blur',()=>{if(D.drag)endDrag(true);cancelPending();});
 document.addEventListener('visibilitychange',()=>{
   if(document.hidden){if(D.drag)endDrag(true);cancelPending();}
   else refreshMeta();
