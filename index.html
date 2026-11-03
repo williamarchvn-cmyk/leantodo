@@ -87,6 +87,9 @@ input::placeholder,textarea::placeholder{color:var(--muted);opacity:1}
 .cm>span{display:inline-flex;align-items:center;gap:4px;min-width:0;max-width:100%}
 .cm i{font-style:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cm svg{width:12px;height:12px;stroke-width:2.2}
+.cm .cj{align-items:flex-start}
+.cm .cj svg{margin-top:1px}
+.cm .cj i{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
 .cd.late::after{content:"";flex:none;width:6px;height:6px;border-radius:50%;background:#FF5A5F;box-shadow:0 0 0 1.5px var(--bg)}
 .card.row{display:flex;align-items:center;gap:10px;height:var(--rh);min-height:0;padding:0 12px}
 .card.row .ct{flex:1;min-width:0;display:block;font-size:14.5px;white-space:nowrap;text-overflow:ellipsis}
@@ -270,20 +273,25 @@ function paint(el,z,i,n){
 /* ================= cards ================= */
 const IC={
   p:'<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.6"/><path d="M4.8 20c.7-3.7 3.6-5.8 7.2-5.8s6.5 2.1 7.2 5.8"/></svg>',
-  t:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.6V12l2.8 1.9"/></svg>'
+  t:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.6V12l2.8 1.9"/></svg>',
+  j:'<svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="4.5"/><path d="M8.6 12.2l2.3 2.3 4.5-4.7"/></svg>'
 };
 function chip(cls,icon,text){const s=document.createElement('span');s.className=cls;s.innerHTML=icon;const i=document.createElement('i');i.textContent=text;s.append(i);return s;}
-function meta(cm,t){
+const swapped=(t,z)=>z===4&&!!t.person;
+function meta(cm,t,sw){
   cm.replaceChildren();
-  if(t.person)cm.append(chip('cp',IC.p,t.person));
+  if(sw)cm.append(chip('cj',IC.j,t.title));
+  else if(t.person)cm.append(chip('cp',IC.p,t.person));
   if(t.time){const x=fmtCard(t.time);if(x)cm.append(chip('cd'+(isLate(t.time)?' late':''),IC.t,x));}
 }
-function fill(el,t){
-  const ct=document.createElement('div');ct.className='ct';ct.textContent=t.title;
-  const cm=document.createElement('div');cm.className='cm';meta(cm,t);
-  el.replaceChildren(ct,cm);
+function fill(el,t,z){
+  const sw=swapped(t,z);
+  const ct=document.createElement('div');ct.className='ct';ct.textContent=sw?t.person:t.title;
+  const cm=document.createElement('div');cm.className='cm';meta(cm,t,sw);
+  el.replaceChildren(ct,cm);el.dataset.mode=sw?'p':'t';
 }
-function cardEl(t){const el=document.createElement('div');el.className='card';el.dataset.id=t.id;fill(el,t);return el;}
+function syncMode(el,z){const f=find(el.dataset.id);if(f&&el.dataset.mode!==(swapped(f.t,z)?'p':'t'))fill(el,f.t,z);}
+function cardEl(t,z){const el=document.createElement('div');el.className='card';el.dataset.id=t.id;fill(el,t,z);return el;}
 function enter(el){el.classList.add('enter');el.addEventListener('animationend',()=>el.classList.remove('enter'),{once:true});}
 
 function fade(l){
@@ -292,12 +300,12 @@ function fade(l){
 }
 function recolor(z){
   const kids=[...lists[z].children],n=kids.length;
-  kids.forEach((el,i)=>{paint(el,z,i,n);el.classList.toggle('row',z===1);});
+  kids.forEach((el,i)=>{paint(el,z,i,n);el.classList.toggle('row',z===1);syncMode(el,z);});
   const c=counts[z];
   if(z===1){c.textContent=n+'/'+MAX1;c.classList.toggle('full',n>=MAX1);}else c.textContent=n?String(n):'';
   fade(lists[z]);
 }
-function renderAll(){Z.forEach(z=>{lists[z].replaceChildren(...S[z].map(cardEl));recolor(z);});}
+function renderAll(){Z.forEach(z=>{lists[z].replaceChildren(...S[z].map(t=>cardEl(t,z)));recolor(z);});}
 function commit(){
   const m=new Map();Z.forEach(z=>S[z].forEach(t=>m.set(t.id,t)));
   Z.forEach(z=>{S[z]=[...lists[z].children].map(c=>m.get(c.dataset.id)).filter(Boolean);recolor(z);});
@@ -342,10 +350,10 @@ function addTask(){
   if(!title){shakeEl(fTitle);fTitle.focus();return;}
   const person=fPerson.value.trim().replace(/\s+/g,' '),time=fTime.get();
   const t={id:uid(),title,person,time};
-  let z=person?4:1;
-  if(z===1&&S[1].length>=MAX1){z=3;shakeEl(counts[1]);}
+  let z=1;
+  if(S[1].length>=MAX1){z=3;shakeEl(counts[1]);}
   S[z].push(t);rememberPerson(person);
-  const el=cardEl(t);enter(el);lists[z].append(el);recolor(z);save();
+  const el=cardEl(t,z);enter(el);lists[z].append(el);recolor(z);save();
   requestAnimationFrame(()=>lists[z].scrollTo({top:lists[z].scrollHeight,behavior:'smooth'}));
   fTitle.value='';fPerson.value='';fTime.set('');syncAdd();
   fTitle.focus({preventScroll:true});
@@ -378,7 +386,7 @@ function closeEdit(ok,fromPop){
       f.t.time=eTime.get();
       rememberPerson(f.t.person);
       const el=lists[f.z].querySelector('[data-id="'+id+'"]');
-      if(el){fill(el,f.t);el.classList.remove('flash');void el.offsetWidth;el.classList.add('flash');}
+      if(el){fill(el,f.t,f.z);el.classList.remove('flash');void el.offsetWidth;el.classList.add('flash');}
       save();
     }
   }
@@ -406,7 +414,7 @@ $('#undo').addEventListener('click',()=>{
   let{task,z,i}=U;hideUndo();
   if(z===1&&S[1].length>=MAX1)z=3;
   i=Math.min(i,S[z].length);S[z].splice(i,0,task);
-  const list=lists[z],el=cardEl(task);
+  const list=lists[z],el=cardEl(task,z);
   flip([list],()=>list.insertBefore(el,list.children[i]||null));
   enter(el);recolor(z);save();
 });
@@ -539,7 +547,9 @@ function deny(on){
 }
 function paintGhost(){const d=D.drag,list=d.card.parentElement,kids=[...list.children];paint(d.g,zoneOf(list),kids.indexOf(d.card),kids.length);}
 function morph(){
-  const d=D.drag,w=d.card.offsetWidth;
+  const d=D.drag,f=find(d.card.dataset.id);
+  if(f)fill(d.g,f.t,d.zone);
+  const w=d.card.offsetWidth;
   d.g.classList.toggle('row',d.zone===1);
   if(w&&Math.abs(w-d.w)>=1){d.ox*=w/d.w;d.w=w;d.g.style.width=w+'px';}
 }
@@ -628,7 +638,7 @@ document.addEventListener('contextmenu',e=>{if(e.target.closest&&e.target.closes
 document.addEventListener('dragstart',e=>{if(e.target.closest&&e.target.closest('.card'))e.preventDefault();});
 
 function refreshMeta(){
-  Z.forEach(z=>{for(const c of lists[z].children){if(c.classList.contains('ph'))continue;const t=S[z].find(x=>x.id===c.dataset.id);if(t)meta(c.lastElementChild,t);}});
+  Z.forEach(z=>{for(const c of lists[z].children){if(c.classList.contains('ph'))continue;const t=S[z].find(x=>x.id===c.dataset.id);if(t)fill(c,t,z);}});
   fTime.refresh();
 }
 setInterval(()=>{if(!D.drag)refreshMeta();},60000);
